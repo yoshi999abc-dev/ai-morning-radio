@@ -70,7 +70,9 @@ jobs:
 
       - name: 時刻を埋めた台本を main に戻す
         run: |
-          git add episodes episodes.json
+          # 台本がまだ 1 本もないときは episodes/ がない（git add が fatal になる）
+          if [ -d episodes ]; then git add episodes; fi
+          git add episodes.json
           if git diff --cached --quiet; then
             echo "台本に変更なし"
           else
