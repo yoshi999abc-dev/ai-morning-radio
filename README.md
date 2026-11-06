@@ -13,6 +13,12 @@
 2. 本人が確かめてマージする
 3. `.github/workflows/daily.yml` が、声を作る → 時刻を台本に埋めて main に戻す → `tools/publish.sh` で公開する
 
+## 初回の設定（手作業）
+
+1. 最初の公開のあと（`gh-pages` ブランチができてから）、Settings → Pages で、配信元を `gh-pages` ブランチ・`/`（root）にする
+2. 無料プランの非公開リポジトリは、Pages を有効にできない（GitHub Pro 以上か、公開リポジトリが要る）。公開にすると、台本・PR・Actions のログが誰にでも見える
+3. Actions を一度手動で流す（Actions → publish → Run workflow）。edge-tts が Actions のサーバーから使えるかは、ここで分かる
+
 ## 中身
 
 ```

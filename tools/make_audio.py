@@ -3,7 +3,8 @@
 
 usage: python3 tools/make_audio.py [--voice ja-JP-NanamiNeural] [--rate +0%] [--force]
 
-- 対象：episodes/YYYY-MM-DD.json のうち、まだ lines_timed がないもの（--force で全部作り直す）。
+- 対象：episodes/YYYY-MM-DD.json のうち、まだ lines_timed がないもの、または直近 keep_days 日以内で
+  audio/<日付>.mp3 がないもの（公開が途中で失敗したとき）。--force で全部作り直す。
 - 声：edge-tts（Microsoft Edge の読み上げ。APIキー不要）。1文ずつ作り、文の間に無音を入れて1本にする。
 - 埋めるもの：seconds・lines_timed・segments・made_at（docs/formats.md の形）と episodes.json の一覧。
 - 入れる無音：先頭 0.6 秒、文の間 0.25 秒、パートの間 1.05 秒、最後 2.05 秒
@@ -67,6 +68,9 @@ def check(ep, date):
             die(f"{date}: news[{i}] に label か lines がありません")
         if not str(n.get("url", "")).startswith("https://"):
             die(f"{date}: news[{i}] の url（出典）が https:// で始まっていません")
+        pts = n.get("points")
+        if not isinstance(pts, list) or not pts or not all(isinstance(x, str) and x.strip() for x in pts):
+            die(f"{date}: news[{i}].points が、空でない文字の並びになっていません（プレーヤーが要点として表示します）")
         groups.append((f"news[{i}].lines", n["lines"]))
     for name, ls in groups:
         for j, l in enumerate(ls):
@@ -159,12 +163,16 @@ def main():
     a = ap.parse_args()
     if not shutil.which("ffmpeg"):
         die("ffmpeg が見つかりません")
+    # 公開が途中で失敗しても作り直せるように、直近 keep_days 日以内で音声がない回も作る
+    keep = json.loads((ROOT / "station.json").read_text(encoding="utf-8")).get("audio", {}).get("keep_days", 30)
+    cut = (datetime.date.today() - datetime.timedelta(days=keep)).isoformat()
     todo = []
     for p in sorted(EPISODES.glob("*.json")):
         if not NAME_RE.match(p.stem):
             continue
         ep = json.loads(p.read_text(encoding="utf-8"))
-        if a.force or not ep.get("lines_timed"):
+        lost = p.stem >= cut and not (AUDIO / f"{p.stem}.mp3").exists()
+        if a.force or lost or not ep.get("lines_timed"):
             todo.append((p, ep))
     if not todo:
         print("作る台本はありません")
