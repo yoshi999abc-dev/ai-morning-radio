@@ -43,16 +43,33 @@ jobs:
           NEEDRESTART_MODE: a
         run: |
           pip install edge-tts
-          # ubuntu-26.04 のイメージには ffmpeg がなく、確認待ちの apt-get が20分止まった（2026-11-06）。
-          # 確認を出さず、止まっても 5 分で失敗にする。
+          # ubuntu-26.04（失敗したイメージは 20261101.186）には ffmpeg がない。
+          # apt の ffmpeg は依存 89 個・69.3MB。2026-11-07 の公開では取得が遅く、
+          # timeout 300 が libavcodec62 の途中で終了コード 124 になった。
+          # その速さではジョブの 20 分に声の作成が収まらない。
+          # 固定の GPL ビルドを 1 本取り、公開された SHA-256 と照合する。
+          # apt の署名確認は無効にしない（ffmpeg では apt を使わない）。
           if command -v ffmpeg >/dev/null; then
             ffmpeg -version | head -1
           else
-            echo "ffmpeg がないので入れます"
-            sudo -E timeout 300 apt-get update
-            sudo -E timeout 300 apt-get install -y ffmpeg
+            echo "ffmpeg がないので、固定ビルドを入れます"
+            tag="autobuild-2026-11-06-12-50"
+            name="ffmpeg-n8.1.3-34-ga35157abb9-linux64-gpl-8.1.tar.xz"
+            sum="2d17c1f53aa6e15882ff76d2a0089d63c3553a401bf2bdc723d798beb5eb4f1b"
+            tmp="$(mktemp -d)"
+            timeout 120 curl -fL --retry 3 --retry-delay 2 \
+              -o "$tmp/$name" \
+              "https://github.com/BtbN/FFmpeg-Builds/releases/download/${tag}/${name}"
+            echo "${sum}  ${tmp}/${name}" | sha256sum -c -
+            tar -xJf "$tmp/$name" -C "$tmp"
+            sudo install -m 755 "$tmp"/ffmpeg-*/bin/ffmpeg /usr/local/bin/ffmpeg
+            rm -rf "$tmp"
             ffmpeg -version | head -1
           fi
+          enc="$(mktemp)"
+          ffmpeg -hide_banner -encoders > "$enc"
+          grep -q libmp3lame "$enc"
+          rm -f "$enc"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git config user.name "radio-bot"
           git config user.email "radio-bot@users.noreply.github.com"
