@@ -1,0 +1,105 @@
+# 台本が main に入ったら、声を作って GitHub Pages（gh-pages ブランチ）に公開する。
+#   1. 台本（episodes/YYYY-MM-DD.json）の PR を本人が確かめてマージする（秘書が台本を作って PR を出す）
+#   2. このワークフローが、声（audio/）を作り、台本に時刻を埋めて main に 1 コミットする
+#   3. tools/publish.sh が、gh-pages を「main の中身＋直近 30 日の音声」で作り直す
+# 声は git の履歴に入れない。過去の音声は gh-pages から取り込んでから publish する（publish.sh は手元の audio/ しか載せないため）。
+name: publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "episodes/*.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 道具を入れる
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
+        run: |
+          pip install edge-tts
+          # ubuntu-26.04（失敗したイメージは 20261101.186）には ffmpeg がない。
+          # apt の ffmpeg は依存 89 個・69.3MB。2026-11-07 の公開では取得が遅く、
+          # timeout 300 が libavcodec62 の途中で終了コード 124 になった。
+          # その速さではジョブの 20 分に声の作成が収まらない。
+          # 固定の GPL ビルドを 1 本取り、公開された SHA-256 と照合する。
+          # apt の署名確認は無効にしない（ffmpeg では apt を使わない）。
+          if command -v ffmpeg >/dev/null; then
+            ffmpeg -version | head -1
+          else
+            echo "ffmpeg がないので、固定ビルドを入れます"
+            tag="autobuild-2026-11-06-12-50"
+            name="ffmpeg-n8.1.3-34-ga35157abb9-linux64-gpl-8.1.tar.xz"
+            sum="2d17c1f53aa6e15882ff76d2a0089d63c3553a401bf2bdc723d798beb5eb4f1b"
+            tmp="$(mktemp -d)"
+            timeout 120 curl -fL --retry 3 --retry-delay 2 \
+              -o "$tmp/$name" \
+              "https://github.com/BtbN/FFmpeg-Builds/releases/download/${tag}/${name}"
+            echo "${sum}  ${tmp}/${name}" | sha256sum -c -
+            tar -xJf "$tmp/$name" -C "$tmp"
+            sudo install -m 755 "$tmp"/ffmpeg-*/bin/ffmpeg /usr/local/bin/ffmpeg
+            rm -rf "$tmp"
+            ffmpeg -version | head -1
+          fi
+          enc="$(mktemp)"
+          ffmpeg -hide_banner -encoders > "$enc"
+          grep -q libmp3lame "$enc"
+          rm -f "$enc"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git config user.name "radio-bot"
+          git config user.email "radio-bot@users.noreply.github.com"
+
+      - name: 過去の音声を gh-pages から取り込む
+        run: |
+          if git fetch -q origin gh-pages; then
+            git restore --source=FETCH_HEAD --worktree -- audio || echo "gh-pages に audio がまだありません"
+          else
+            echo "gh-pages がまだありません（初回）"
+          fi
+
+      - name: 声を作り、台本に時刻を埋める
+        run: python3 tools/make_audio.py
+
+      - name: 時刻を埋めた台本を main に戻す
+        run: |
+          # 台本がまだ 1 本もないときは episodes/ がない（git add が fatal になる）
+          if [ -d episodes ]; then git add episodes; fi
+          git add episodes.json
+          if git diff --cached --quiet; then
+            echo "台本に変更なし"
+          else
+            git commit -q -m "audio: 時刻を台本に埋める [skip ci]"
+            git pull -q --rebase origin main
+            git push -q origin HEAD:main
+          fi
+
+      - name: gh-pages に公開する
+        run: bash tools/publish.sh
+
+      - name: Pages の再ビルドを促す
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds" || echo "Pages がまだ有効ではありません（初回は設定が要ります）"
